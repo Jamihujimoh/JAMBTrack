@@ -91,8 +91,6 @@ module.exports = async (req, res) => {
       last_processed: d.last_processed || null
     };
 
-    const safeIncoming = firestoreSafe(incoming);
-
     const hasRegular =
       Object.keys(regular).length > 0;
 
@@ -135,6 +133,8 @@ module.exports = async (req, res) => {
       status: "online",
       last_seen: now
     };
+
+    const safeIncoming = firestoreSafe(incoming);
 
     const project = x => stable({
       candidate: x.candidate || {},
