@@ -224,14 +224,70 @@ function classify(v){const s=String(v||"").toLowerCase();if(/error|unavailable|f
 function date(v){if(!v)return"—";const d=new Date(v);return isNaN(d)?String(v):d.toLocaleString()}
 function messages(items){const root=$("messageList");root.innerHTML="";if(!Array.isArray(items)||!items.length){root.className="empty";root.textContent="No additional JAMB messages captured yet.";return}root.className="";items.forEach((x,i)=>{const box=document.createElement("div");box.className="raw";const l=document.createElement("label");l.textContent=x.source||x.page||"Message "+(i+1);const p=document.createElement("p");p.textContent=clean(x.text||x.message);box.append(l,p);root.append(box)})}
 function historyRender(){const body=$("historyRows");body.innerHTML="";$("historyEmpty").hidden=historyItems.length>0;$("historyTable").hidden=!historyItems.length;historyItems.slice(0,100).forEach(x=>{const tr=document.createElement("tr"),r=x.regular_admission||{},t=x.transfer_admission||{};[date(x.saved_at||x.checked_at),r.message||r.status_text||r.status||"—",([r.institution,r.course].filter(Boolean).join(" / ")||"—"),t.message||t.status_text||t.status||"—"].forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.append(td)});body.append(tr)})}
-function applyData(d,save=false){currentData=d;const c=d.candidate||{},r=d.regular_admission||{},t=d.transfer_admission||{},a=d.agent||{},rs=r.message||r.status_text||r.status||"No regular admission text captured",ts=t.message||t.status_text||t.status||"No transfer message captured";
-set("regularSummary",rs);set("regularStatus",rs);set("transferSummary",ts);set("transferStatus",ts);
-pill("regularPill",rs,classify(rs));pill("regularPill2",rs,classify(rs));pill("transferPill",ts,classify(ts));pill("transferPill2",ts,classify(ts));
-set("candidateName",c.name);set("candidateName2",c.name);set("regNumber",r.reg_number||c.reg_number);set("regNumber2",r.reg_number||c.reg_number);set("regNumber3",r.reg_number||c.reg_number);set("profileCode",c.profile_code);set("profileCode2",c.profile_code);set("examName",c.exam_name);set("candidateMessage",c.message);
-set("institution",r.institution);set("institution2",r.institution);set("course",r.course);set("course2",r.course);set("subjects",r.subject_combination);set("subjects2",r.subject_combination);set("regularMessage",r.message||r.status_text||r.status);set("regularChecked",date(r.checked_at));
-set("transferInstitution",t.institution);set("transferCourse",t.course);set("transferMessage",t.message||t.status_text||t.status);set("transferChecked",date(t.checked_at));set("agentSummary",a.status||"Termux agent");set("agentDetail",a.last_seen?"Last report: "+date(a.last_seen):"No agent report received");pill("agentPill",a.status||"No report",a.status==="online"?"good":"");
-const updated=d.last_successful_update||d.last_updated||r.checked_at||t.checked_at;set("lastUpdated",updated?"Last successful update: "+date(updated):"Saved result received");messages(d.page_messages||[]);
-if(save){localStorage.setItem(SNAP_KEY,JSON.stringify(d));historyItems.unshift({...d,saved_at:new Date().toISOString()});historyItems=historyItems.slice(0,100);localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));historyRender();localState()}}
+function applyData(d,save=false){
+const c=d.candidate||{};
+const r=d.regular_admission||{};
+const t=d.transfer_admission||d.transfer_approval||{};
+const a=d.agent||{};
+
+const reg=r.reg_number||r.jamb_registration||c.reg_number||c.jamb_registration;
+const rs=r.message||r.status_text||r.status||r.admission_status||"No regular admission text captured";
+const ts=t.message||t.status_text||t.status||t.table_text||"No transfer message captured";
+
+currentData=d;
+
+set("regularSummary",rs);
+set("regularStatus",rs);
+set("transferSummary",ts);
+set("transferStatus",ts);
+
+pill("regularPill",rs,classify(rs));
+pill("regularPill2",rs,classify(rs));
+pill("transferPill",ts,classify(ts));
+pill("transferPill2",ts,classify(ts));
+
+set("candidateName",c.name||c.full_name||c.candidate_name);
+set("candidateName2",c.name||c.full_name||c.candidate_name);
+set("regNumber",reg);
+set("regNumber2",reg);
+set("regNumber3",reg);
+
+set("profileCode",c.profile_code||c.profileCode);
+set("profileCode2",c.profile_code||c.profileCode);
+set("examName",c.exam_name);
+set("candidateMessage",c.message);
+
+set("institution",r.institution);
+set("institution2",r.institution);
+set("course",r.course);
+set("course2",r.course);
+set("subjects",r.subject_combination);
+set("subjects2",r.subject_combination);
+set("regularMessage",r.message||r.status_text||r.status||r.admission_status);
+set("regularChecked",date(r.checked_at));
+
+set("transferInstitution",t.institution);
+set("transferCourse",t.course);
+set("transferMessage",ts);
+set("transferChecked",date(t.checked_at));
+
+set("agentSummary",a.status||"Termux agent");
+set("agentDetail",a.last_seen?"Last report: "+date(a.last_seen):"No agent report received");
+pill("agentPill",a.status||"No report",a.status==="online"?"good":"");
+
+const updated=d.last_successful_update||d.last_updated||r.checked_at||t.checked_at;
+set("lastUpdated",updated?"Last successful update: "+date(updated):"Saved result received");
+messages(d.page_messages||[]);
+
+if(save){
+localStorage.setItem(SNAP_KEY,JSON.stringify(d));
+historyItems.unshift({...d,saved_at:new Date().toISOString()});
+historyItems=historyItems.slice(0,100);
+localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));
+historyRender();
+localState();
+}
+}
 function localState(){set("localSnapshotState",localStorage.getItem(SNAP_KEY)?"A last-known-good snapshot is saved on this device.":"No saved snapshot yet.")}
 function errorState(msg){$("syncDot").className="dot err";set("syncLabel","JAMBTrack API unavailable");set("syncDetail",msg+" — keeping the last successful result.");if(currentData)set("lastUpdated","Showing last successful update: "+date(currentData.last_successful_update||currentData.last_updated))}
 function valid(d){if(!d||typeof d!=="object"||Array.isArray(d)||d.ok===false||d.success===false||d.error)return false;return d.success===true||d.fetch_state==="success"||["candidate","regular_admission","transfer_admission"].some(k=>d[k]?.fetch_state==="success")}

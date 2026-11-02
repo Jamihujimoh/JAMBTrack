@@ -10,6 +10,7 @@ function firestoreSafe(value) {
         : firestoreSafe(item)
     );
   }
+
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, item] of Object.entries(value)) {
@@ -17,12 +18,41 @@ function firestoreSafe(value) {
     }
     return out;
   }
+
   return value;
 }
 
-function stable(v) {
-  if (Array.isArray(v)) return v.map(stable);
-  if (!v || typeof v !== "object") return v;
+// Preserve old values when incoming values are empty.
+function mergeFresh(oldValue, newValue) {
+  if (newValue === null || newValue === undefined || newValue === "") {
+    return oldValue;
+  }
+
+  if (Array.isArray(newValue)) {
+    return newValue.length ? newValue : (oldValue ?? newValue);
+  }
+
+  if (typeof newValue === "object") {
+    const oldObject =
+      oldValue && typeof oldValue === "object" && !Array.isArray(oldValue)
+        ? oldValue
+        : {};
+
+    const result = { ...oldObject };
+
+    for (const [key, value] of Object.entries(newValue)) {
+      result[key] = mergeFresh(oldObject[key], value);
+    }
+
+    return result;
+  }
+
+  return newValue;
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (!value || typeof value !== "object") return value;
 
   const skip = new Set([
     "checked_at", "last_seen", "last_updated",
@@ -31,9 +61,10 @@ function stable(v) {
   ]);
 
   const out = {};
-  for (const k of Object.keys(v).sort()) {
-    if (!skip.has(k)) out[k] = stable(v[k]);
+  for (const key of Object.keys(value).sort()) {
+    if (!skip.has(key)) out[key] = stable(value[key]);
   }
+
   return out;
 }
 
@@ -58,47 +89,43 @@ module.exports = async (req, res) => {
       ? body.data
       : body;
 
-    // Map the actual Termux JSON structure.
     const regular = d.regular_admission || d.regular || {};
-    const transfer = d.transfer_approval ||
+    const transfer =
+      d.transfer_approval ||
       d.transfer_admission ||
-      d.transfer || {};
+      d.transfer ||
+      {};
 
-    const incoming = {
-      candidate: d.candidate || {},
+    // Reject a refresh if any portal section reported an error.
+    if (Array.isArray(d.refresh_errors) && d.refresh_errors.length) {
+      throw new Error("Refresh contains errors. Previous website data was preserved.");
+    }
 
-      regular_admission: {
-        ...regular,
-        reg_number: regular.reg_number || regular.jamb_registration || "",
-        status_text: regular.status_text || regular.admission_status || "",
-        message: regular.message || regular.admission_status || ""
-      },
+    // Require all three sections before accepting a new refresh.
+    if (
+      !d.candidate ||
+      !d.candidate.name ||
+      !d.candidate.reg_number ||
+      !regular ||
+      !Object.keys(regular).length ||
+      !transfer ||
+      !Object.keys(transfer).length
+    ) {
+      throw new Error("Incomplete refresh. Previous website data was preserved.");
+    }
 
-      transfer_admission: {
-        ...transfer,
-        status_text: transfer.status_text || transfer.table_text || "",
-        message: transfer.message || transfer.table_text || ""
-      },
+    const regularStatus =
+      regular.admission_status ||
+      regular.status_text ||
+      regular.message;
 
-      page_messages: Array.isArray(d.page_messages)
-        ? d.page_messages
-        : [],
+    const transferStatus =
+      transfer.table_text ||
+      transfer.status_text ||
+      transfer.message;
 
-      refresh_errors: Array.isArray(d.refresh_errors)
-        ? d.refresh_errors
-        : [],
-
-      last_processed: d.last_processed || null
-    };
-
-    const hasRegular =
-      Object.keys(regular).length > 0;
-
-    const hasTransfer =
-      Object.keys(transfer).length > 0;
-
-    if (!hasRegular && !hasTransfer) {
-      throw new Error("No admission information found in jamb_data.json.");
+    if (!regularStatus || !transferStatus) {
+      throw new Error("Admission status information is incomplete. Previous website data was preserved.");
     }
 
     const db = getDb();
@@ -106,23 +133,40 @@ module.exports = async (req, res) => {
     const snap = await ref.get();
     const old = snap.exists ? snap.data() : {};
 
-    // Preserve previous successful information if a section is empty.
-    for (const key of [
-      "candidate",
-      "regular_admission",
-      "transfer_admission"
-    ]) {
-      if (!incoming[key] || !Object.keys(incoming[key]).length) {
-        incoming[key] = old[key] || {};
-      }
-    }
+    // Map the actual Termux JSON structure.
+    const incoming = {
+      candidate: d.candidate,
+      regular_admission: {
+        ...regular,
+        reg_number:
+          regular.reg_number ||
+          regular.jamb_registration ||
+          d.candidate.reg_number,
+        status_text: regular.status_text || regular.admission_status || "",
+        message: regular.message || regular.admission_status || ""
+      },
+      transfer_admission: {
+        ...transfer,
+        status_text: transfer.status_text || transfer.table_text || "",
+        message: transfer.message || transfer.table_text || ""
+      },
+      page_messages: Array.isArray(d.page_messages)
+        ? d.page_messages
+        : [],
+      refresh_errors: [],
+      last_processed: d.last_processed || null
+    };
 
-    if (
-      !Object.keys(incoming.regular_admission).length &&
-      !Object.keys(incoming.transfer_admission).length
-    ) {
-      throw new Error("No successful admission sections available.");
-    }
+    // Merge field by field, preserving old valid information.
+    incoming.candidate = mergeFresh(old.candidate || {}, incoming.candidate);
+    incoming.regular_admission = mergeFresh(
+      old.regular_admission || {},
+      incoming.regular_admission
+    );
+    incoming.transfer_admission = mergeFresh(
+      old.transfer_admission || {},
+      incoming.transfer_admission
+    );
 
     const now = new Date().toISOString();
 
@@ -136,11 +180,11 @@ module.exports = async (req, res) => {
 
     const safeIncoming = firestoreSafe(incoming);
 
-    const project = x => stable({
-      candidate: x.candidate || {},
-      regular_admission: x.regular_admission || {},
-      transfer_admission: x.transfer_admission || {},
-      page_messages: x.page_messages || []
+    const project = value => stable({
+      candidate: value.candidate || {},
+      regular_admission: value.regular_admission || {},
+      transfer_admission: value.transfer_admission || {},
+      page_messages: value.page_messages || []
     });
 
     const changed =
