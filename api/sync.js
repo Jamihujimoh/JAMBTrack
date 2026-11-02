@@ -2,6 +2,24 @@ const crypto = require("crypto");
 const { checkSync } = require("../lib/auth");
 const { getDb } = require("../lib/firebase");
 
+function firestoreSafe(value) {
+  if (Array.isArray(value)) {
+    return value.map(item =>
+      Array.isArray(item)
+        ? { items: item.map(firestoreSafe) }
+        : firestoreSafe(item)
+    );
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = firestoreSafe(item);
+    }
+    return out;
+  }
+  return value;
+}
+
 function stable(v) {
   if (Array.isArray(v)) return v.map(stable);
   if (!v || typeof v !== "object") return v;
@@ -73,6 +91,8 @@ module.exports = async (req, res) => {
       last_processed: d.last_processed || null
     };
 
+    const safeIncoming = firestoreSafe(incoming);
+
     const hasRegular =
       Object.keys(regular).length > 0;
 
@@ -127,16 +147,16 @@ module.exports = async (req, res) => {
       !snap.exists ||
       JSON.stringify(project(old)) !== JSON.stringify(project(incoming));
 
-    await ref.set(incoming, { merge: true });
+    await ref.set(safeIncoming, { merge: true });
 
     if (changed) {
       await ref.collection("history")
         .doc(crypto.randomUUID())
         .set({
           saved_at: now,
-          candidate: incoming.candidate,
-          regular_admission: incoming.regular_admission,
-          transfer_admission: incoming.transfer_admission
+          candidate: safeIncoming.candidate,
+          regular_admission: safeIncoming.regular_admission,
+          transfer_admission: safeIncoming.transfer_admission
         });
     }
 
